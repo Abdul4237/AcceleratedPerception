@@ -321,7 +321,7 @@ roiImages=[]
 maskImages=[]
 
 #finding all images for every patient
-for x in range(50): 
+for x in range(1000): 
   #fetch values from csv
   laterality=data._get_value(x,'left or right breast')
   view=data._get_value(x,'image view')
