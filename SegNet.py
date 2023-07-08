@@ -1,20 +1,18 @@
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, concatenate
-from tensorflow.keras.layers import Activation
-from tensorflow.keras.layers import Convolution2D
-from tensorflow.keras.layers import BatchNormalization
-from tensorflow.keras.layers import MaxPool2D
-from custom_layers import MaxPoolingWithArgmax2D
-from custom_layers import MaxUnpooling2D
-import numpy as np
-from PIL import Image
+import math
 import os
-import pandas as pd
-import cv2
-import pydicom as dicom
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pydicom as dicom
+import tensorflow as tf
+from custom_layers import MaxPoolingWithArgmax2D, MaxUnpooling2D
+from PIL import Image
+from tensorflow import keras
+from tensorflow.keras.layers import (Activation, BatchNormalization,
+                                     Convolution2D, Input, MaxPool2D,
+                                     concatenate)
+from tensorflow.keras.models import Model
+
 gpu = tf.config.list_physical_devices('GPU')
 for i in gpu:
     tf.config.experimental.set_memory_growth(i, True)
@@ -257,40 +255,13 @@ def defineNetwork():
     return model
 
 model=defineNetwork()
-model.summary()
+#model.summary()
 model.compile(
     loss=keras.losses.BinaryCrossentropy(from_logits=True),
     optimizer=keras.optimizers.Adam(learning_rate=0.0001),
     metrics=['accuracy'],
 )
-
 #tf.keras.utils.plot_model(model, show_shapes=True)
-
-#train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
-        #rescale=1./255,
-        #shear_range=0.2,
-        #zoom_range=0.2,
-        #horizontal_flip=True)
-#train_generator = train_datagen.flow_from_directory(
-        #'D:\BreastCancer\sample',
-        #target_size=(250, 250),
-        #batch_size=5,
-        #class_mode=None)
-#print(train_generator)
-#train_ds = tf.keras.utils.image_dataset_from_directory(
-  #'D:\BreastCancer\sample',
-  #validation_split=0.1,
-  #subset="training",
-  #seed=123,
-  #image_size=(256, 256),
-  #batch_size=5)
-#test_ds=train_ds
-#print(train_ds)
-
-
-
-
-#test_scores = model.evaluate(x, y_test, verbose=2)
 def findMammogram(path,end=1):
   obj = os.scandir(path)
   for entry in obj :
@@ -305,23 +276,63 @@ def resize_image(image):
     # resize image
     image = tf.image.resize(image, (256,256))
     return image
-
 def resize_mask(mask):
     # resize the mask
     mask = tf.image.resize(mask, (256,256))
     mask = tf.cast(mask, tf.uint8)
     return mask   
-
+def findMaskBox(mask):
+  left,right,top,bottom=0,0,0,0
+  foundLeft,foundTop=False,False
+  print(mask.shape)
+  #finding bounding box
+  for i in range(mask.shape[1]):
+    if np.max(mask[:,i]) ==255 and foundLeft==False:
+      left=i-1
+      foundLeft=True
+    elif np.max(mask[:,i]) ==0 and foundLeft:
+      right=i
+      break
+  for s in range(mask.shape[0]):
+    if np.max(mask[s,:]) ==255 and foundTop==False:
+      top=s
+      foundTop=True
+    elif np.max(mask[s,:]) ==0 and foundTop:
+      bottom=s
+      break
+  height=bottom-top
+  width=right-left
+  #creating bounding box square by adding extra pixels to smaller length
+  if height>width:
+    dif=height-width
+    update=math.floor(dif/2)
+    left=left - update
+    if dif % 2 != 0:
+      right=right + update + 1
+    else:
+      right=right +update
+    width=right-left
+    print(height,width)
+  elif width>height:
+    dif=width-height
+    update=math.floor(dif/2)
+    top=top-update
+    if dif % 2 != 0:
+      bottom=bottom + update + 1
+    else:
+      bottom=bottom +update
+    height=bottom-top
+    print(height,width)
+  return left,right,top,bottom
 
 data = pd.read_csv(r"E:\ADMANI\manifest-ZkhPvrLo5216730872708713142\mass_case_description_train_set.csv")
 base=r'e:\ADMANI\manifest-ZkhPvrLo5216730872708713142\CBIS-DDSM'
 roiPath2=''
 mamImages=[]
-roiImages=[]
 maskImages=[]
-
+roiImages=[]
 #finding all images for every patient
-for x in range(1000): 
+for x in range(2): 
   #fetch values from csv
   laterality=data._get_value(x,'left or right breast')
   view=data._get_value(x,'image view')
@@ -329,22 +340,21 @@ for x in range(1000):
   number=data._get_value(x,'abnormality id')
   path=''
   pathList=[]
-  #create base path for full mammogram
   if number ==1:
+    #finding full mammogram
     path=f"Mass-Training_{id}_{laterality}_{view}"
     path=os.path.join(base,path)
     mamPath=findMammogram(path)
+    #finding 1st mask
     path2=path+'_1'
     im1=findMammogram(path2)
     im2=findMammogram(path2,2)
     if os.path.getsize(im1)>os.path.getsize(im2):
-        roiPath=im2
         maskPath=im1
     else:
-      roiPath=im1
       maskPath=im2
-    pathList=[mamPath,roiPath,maskPath]
-  #add multiple ROI's from same patient(if)
+    pathList=[mamPath,maskPath]
+  #add additional masks from same patient(if)
   if number!=1:
     path=f"Mass-Training_{id}_{laterality}_{view}"
     path=os.path.join(base,path)
@@ -352,12 +362,9 @@ for x in range(1000):
     im1=findMammogram(newPath)
     im2=findMammogram(newPath,2)
     if os.path.getsize(im1)>os.path.getsize(im2):
-      roi=im2
       mask=im1
     else:
-      roi=im1
       mask=im2
-    pathList.append(roi)
     pathList.append(mask)
   for i in pathList:
     ds= dicom.dcmread(i)
@@ -366,23 +373,39 @@ for x in range(1000):
     # Rescaling grey scale between 0-255
     scaled_image = (np.maximum(new_image, 0) / new_image.max()) * 255.0
     # Convert to uint
-    scaled_image = np.uint16(scaled_image)
-    image=tf.convert_to_tensor(scaled_image,dtype=tf.uint16)
-    image=tf.expand_dims(image,-1)
-    image=tf.expand_dims(image,0)
-    if len(pathList)==3:
-      if pathList.index(i)==0:
-        mamImages.append(image)
-      elif pathList.index(i)==1:
-        roiImages.append(image)
-      else:
-        maskImages.append(image)
-    elif len(pathList)==2:
-      if pathList.index(i)==0:
-        roiImages.append(image)
-      elif pathList.index(i)==1:
-        maskImages.append(image)
-x = [resize_image(i) for i in mamImages]
+    image = np.uint8(scaled_image)
+    #adding images into lists
+    if len(pathList)==2 and pathList.index(i)==0:
+      mamImages.append(image)
+    elif len(pathList)==2 or pathList.index(i)==0:
+      # Finding pixel coordinates of corners
+      mask=image
+      left,right,top,bottom=findMaskBox(mask)
+      #cropping out mask
+      mask = Image.fromarray(mask.astype('uint8'), 'L')
+      mask=mask.crop((left,top,right,bottom))
+      #applying CLAHE on masks
+
+      #cropping out ROI from mammogram
+      roi=mamImages[-1]
+      roi = Image.fromarray(roi.astype('uint8'), 'L')
+      roi=roi.crop((left,top,right,bottom))
+      fig = plt.figure(figsize=(10, 7))
+      fig.add_subplot(2,2, 1)
+      plt.imshow(mask)
+      fig.add_subplot(2,2,2)
+      plt.imshow(roi,cmap='gray')
+      plt.show()
+      #making image model ready by expanding dims
+      roi=tf.convert_to_tensor(np.array(roi))
+      mask=tf.convert_to_tensor(np.array(mask))
+      roi=tf.expand_dims(roi,-1)
+      roi=tf.expand_dims(roi,0)
+      mask=tf.expand_dims(mask,-1)
+      mask=tf.expand_dims(mask,0)
+      roiImages.append(roi)
+      maskImages.append(mask)
+x = [resize_image(i) for i in roiImages]
 y = [resize_mask(m) for m in maskImages]
 x=tf.data.Dataset.from_tensor_slices(x)
 y=tf.data.Dataset.from_tensor_slices(y)
@@ -390,17 +413,9 @@ train=tf.data.Dataset.zip((x, y))
 print(x,y)
 
   
-history = model.fit(train, epochs=20,batch_size=4)
-#final_image = Image.fromarray(scaled_image)
-#final_image=cv2.cvtColor(final_image, cv2.COLOR_RGB2BGR)
-#ray_image = cv2.cvtColor(final_image, cv2.COLOR_BGR2GRAY)
+#history = model.fit(train, epochs=20,batch_size=4)
 
-#ret,thresh = cv2.threshold(gray_image,127,255,0)
-#contours,hierarchy = cv2.findContours(thresh, 1, 2)
-#cnt = contours[0]
-
-#x,y,w,h = cv2.boundingRect(cnt)
-#cv2.rectangle(final_image,(x,y),(x+w,y+h),(0,255,0),2)
-#cv2.imshow('Bounding Box',final_image)
-#plt.imshow(final_image)
-#plt.show()
+#after data issue solved:
+# learn to manually mask ROI of required size using bounding boxes
+# figure out how to get ROI's from new data
+# make new loss function of intersection of area
