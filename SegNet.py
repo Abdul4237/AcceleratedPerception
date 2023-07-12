@@ -4,11 +4,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pydicom as dicom
-import pydot as pdt
 import tensorflow as tf
 from custom_layers import MaxPoolingWithArgmax2D, MaxUnpooling2D
 from PIL import Image
-import scipy as sp
 import cv2
 from tensorflow import keras
 from tensorflow.keras.layers import (Activation, BatchNormalization,
