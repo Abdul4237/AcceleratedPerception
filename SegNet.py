@@ -7,6 +7,8 @@ import pydicom as dicom
 import tensorflow as tf
 from custom_layers import MaxPoolingWithArgmax2D, MaxUnpooling2D
 from PIL import Image
+import scipy as sp
+import cv2
 from tensorflow import keras
 from tensorflow.keras.layers import (Activation, BatchNormalization,
                                      Convolution2D, Input, MaxPool2D,
@@ -262,13 +264,6 @@ model.compile(
     metrics=['accuracy'],
 )
 #tf.keras.utils.plot_model(model, show_shapes=True)
-def findMammogram(path,end=1):
-  obj = os.scandir(path)
-  for entry in obj :
-    for entries in os.scandir(entry.path):
-      newPath=os.path.join(entries.path,f'1-{end}.dcm')
-      print (newPath)
-      return newPath
 def resize_image(image):
     # scale the image
     image = tf.cast(image, tf.float32)
@@ -284,24 +279,27 @@ def resize_mask(mask):
 def findMaskBox(mask):
   left,right,top,bottom=0,0,0,0
   foundLeft,foundTop=False,False
-  print(mask.shape)
   #finding bounding box
   for i in range(mask.shape[1]):
-    if np.max(mask[:,i]) ==255 and foundLeft==False:
+    if np.max(mask[:,[i]]) >0 and foundLeft==False:
       left=i-1
       foundLeft=True
-    elif np.max(mask[:,i]) ==0 and foundLeft:
+    elif np.max(mask[:,[i]]) ==0 and foundLeft==True and i>left+30 or i==mask.shape[1]-1:
       right=i
       break
+
   for s in range(mask.shape[0]):
-    if np.max(mask[s,:]) ==255 and foundTop==False:
-      top=s
+    if np.max(mask[[s],:]) >0 and foundTop==False:
+      top=s-1
       foundTop=True
-    elif np.max(mask[s,:]) ==0 and foundTop:
+    elif np.max(mask[[s],:]) ==0 and foundTop==True and s>top+30 or s==mask.shape[0]-1:
       bottom=s
       break
   height=bottom-top
   width=right-left
+  #print(mask.shape)
+  #print(left,right,top,bottom)
+  #print(height,width)
   #creating bounding box square by adding extra pixels to smaller length
   if height>width:
     dif=height-width
@@ -312,7 +310,6 @@ def findMaskBox(mask):
     else:
       right=right +update
     width=right-left
-    print(height,width)
   elif width>height:
     dif=width-height
     update=math.floor(dif/2)
@@ -322,9 +319,15 @@ def findMaskBox(mask):
     else:
       bottom=bottom +update
     height=bottom-top
-    print(height,width)
+  #print(height,width)
   return left,right,top,bottom
-
+def findFiles(path):
+    paths=[]
+    for subdir,dir, files in os.walk(path):
+        for file in files:
+            paths.append(os.path.join(subdir,file))
+    #print(paths)
+    return paths
 data = pd.read_csv(r"E:\ADMANI\manifest-ZkhPvrLo5216730872708713142\mass_case_description_train_set.csv")
 base=r'e:\ADMANI\manifest-ZkhPvrLo5216730872708713142\CBIS-DDSM'
 roiPath2=''
@@ -332,7 +335,13 @@ mamImages=[]
 maskImages=[]
 roiImages=[]
 #finding all images for every patient
-for x in range(2): 
+numimages=1318
+sample=[420,487,518,726,788,789,828,841,881,882,1028,1037,1100,1104,1132,1207,1234,1235]
+lastid=0
+lastview=''
+lastlat=''
+for x in range(0):
+  print(x) 
   #fetch values from csv
   laterality=data._get_value(x,'left or right breast')
   view=data._get_value(x,'image view')
@@ -340,31 +349,34 @@ for x in range(2):
   number=data._get_value(x,'abnormality id')
   path=''
   pathList=[]
+  if id!=lastid or lastview!= view or lastlat!=laterality:
+     lastid=id
+     lastview=view
+     lastlat=laterality
+     mamImages=[]
   if number ==1:
     #finding full mammogram
     path=f"Mass-Training_{id}_{laterality}_{view}"
     path=os.path.join(base,path)
-    mamPath=findMammogram(path)
+    mamPath=findFiles(path)[0]
     #finding 1st mask
     path2=path+'_1'
-    im1=findMammogram(path2)
-    im2=findMammogram(path2,2)
-    if os.path.getsize(im1)>os.path.getsize(im2):
-        maskPath=im1
+    imgs=findFiles(path2)
+    if os.path.getsize(imgs[0])>os.path.getsize(imgs[1]):
+        maskPath=imgs[0]
     else:
-      maskPath=im2
+      maskPath=imgs[1]
     pathList=[mamPath,maskPath]
   #add additional masks from same patient(if)
   if number!=1:
     path=f"Mass-Training_{id}_{laterality}_{view}"
     path=os.path.join(base,path)
     newPath= path + f'_{number}'
-    im1=findMammogram(newPath)
-    im2=findMammogram(newPath,2)
-    if os.path.getsize(im1)>os.path.getsize(im2):
-      mask=im1
+    imgs=findFiles(newPath)
+    if os.path.getsize(imgs[0])>os.path.getsize(imgs[1]):
+      mask=imgs[0]
     else:
-      mask=im2
+      mask=imgs[1]
     pathList.append(mask)
   for i in pathList:
     ds= dicom.dcmread(i)
@@ -378,44 +390,89 @@ for x in range(2):
     if len(pathList)==2 and pathList.index(i)==0:
       mamImages.append(image)
     elif len(pathList)==2 or pathList.index(i)==0:
-      # Finding pixel coordinates of corners
+    # finding pixel cordinates of corners
       mask=image
+      #plt.imshow(mask,cmap='gray')
+      #plt.show()
       left,right,top,bottom=findMaskBox(mask)
-      #cropping out mask
+    #cropping out mask
       mask = Image.fromarray(mask.astype('uint8'), 'L')
       mask=mask.crop((left,top,right,bottom))
-      #applying CLAHE on masks
-
-      #cropping out ROI from mammogram
+    #cropping out ROI from mammogram
       roi=mamImages[-1]
+      #plt.imshow(roi,cmap='gray')
+      #plt.show()
       roi = Image.fromarray(roi.astype('uint8'), 'L')
       roi=roi.crop((left,top,right,bottom))
-      fig = plt.figure(figsize=(10, 7))
-      fig.add_subplot(2,2, 1)
-      plt.imshow(mask)
-      fig.add_subplot(2,2,2)
-      plt.imshow(roi,cmap='gray')
-      plt.show()
-      #making image model ready by expanding dims
-      roi=tf.convert_to_tensor(np.array(roi))
-      mask=tf.convert_to_tensor(np.array(mask))
-      roi=tf.expand_dims(roi,-1)
-      roi=tf.expand_dims(roi,0)
-      mask=tf.expand_dims(mask,-1)
-      mask=tf.expand_dims(mask,0)
-      roiImages.append(roi)
-      maskImages.append(mask)
-x = [resize_image(i) for i in roiImages]
-y = [resize_mask(m) for m in maskImages]
-x=tf.data.Dataset.from_tensor_slices(x)
-y=tf.data.Dataset.from_tensor_slices(y)
-train=tf.data.Dataset.zip((x, y))
-print(x,y)
+      if np.max(np.array(mask))==255:
+        pass
+      else:
+         print(f'False:{x}')
+    #displaying images
+      #fig = plt.figure(figsize=(10, 7))
+      #fig.add_subplot(2,2, 1)
+      #plt.imshow(mask,cmap='gray')
+      #fig.add_subplot(2,2,2)
+      #plt.imshow(roi,cmap='gray')
+      #plt.show()
+    #applying CLAHE on ROI's
+      clahe = cv2.createCLAHE(clipLimit=1)
+      final_img = clahe.apply(np.array(roi)) + 10
+      #fig.add_subplot(2,2,2)
+      #plt.imshow(final_img,cmap='gray')
+      #fig.add_subplot(2,2,1)
+      #plt.imshow(roi,cmap='gray')
+      #plt.show()
+    #making image model ready by expanding dims
+      #roi=tf.convert_to_tensor(np.array(roi))
+      #mask=tf.convert_to_tensor(np.array(mask))
+      #roi=tf.expand_dims(roi,-1)
+      #roi=tf.expand_dims(roi,0)
+      #mask=tf.expand_dims(mask,-1)
+      #mask=tf.expand_dims(mask,0)
+      #roiImages.append(roi)
+      #maskImages.append(mask)
+      clahe = Image.fromarray(final_img.astype('uint8'), 'L')
+      clahe.save(f'E:\ADMANI\ROI2\{x}.bmp')
+      #roi.save(f'E:\ADMANI\ROI2\{x}.bmp')
+      #mask.save(f'E:\ADMANI\mask\{x}.bmp')
+
+
+data_gen_args = dict(featurewise_center=False,
+                     featurewise_std_normalization=False,
+                    rotation_range=90,
+                     width_shift_range=0.1,
+                     height_shift_range=0.1,
+                     zoom_range=0.2)
+image_datagen = tf.keras.preprocessing.image.ImageDataGenerator(**data_gen_args)
+mask_datagen = tf.keras.preprocessing.image.ImageDataGenerator(**data_gen_args)
+seed=1
+image_generator = image_datagen.flow_from_directory(
+    r'E:\ADMANI\ROIs',
+    class_mode=None,
+    target_size=(256,256),
+    color_mode='grayscale',
+    batch_size=2,
+    keep_aspect_ratio=True,
+    seed=seed)
+mask_generator = mask_datagen.flow_from_directory(
+    r'E:\ADMANI\masks',
+    target_size=(256,256),
+    color_mode='grayscale',
+    class_mode=None,
+    batch_size=2,
+    keep_aspect_ratio=True,
+    seed=seed)
+# combine generators into one which yields image and masks
+train_generator = zip(image_generator, mask_generator)
+history=model.fit(
+    train_generator,
+    batch_size=2,
+    epochs=50)
 
   
-#history = model.fit(train, epochs=20,batch_size=4)
+#history = model.fit(train, epochs=100,batch_size=4)
 
 #after data issue solved:
-# learn to manually mask ROI of required size using bounding boxes
 # figure out how to get ROI's from new data
 # make new loss function of intersection of area
