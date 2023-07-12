@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pydicom as dicom
+import pydot as pdt
 import tensorflow as tf
 from custom_layers import MaxPoolingWithArgmax2D, MaxUnpooling2D
 from PIL import Image
@@ -257,7 +258,7 @@ def defineNetwork():
     return model
 
 model=defineNetwork()
-#model.summary()
+model.summary()
 model.compile(
     loss=keras.losses.BinaryCrossentropy(from_logits=True),
     optimizer=keras.optimizers.Adam(learning_rate=0.0001),
@@ -465,14 +466,14 @@ mask_generator = mask_datagen.flow_from_directory(
     seed=seed)
 # combine generators into one which yields image and masks
 train_generator = zip(image_generator, mask_generator)
+checkpoint_path = 'E:\ADMANI\weights.ckpt'
+checkpoint_dir = os.path.dirname(checkpoint_path)
+cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath=checkpoint_path,
+                                                 save_weights_only=True,
+                                                 verbose=1,
+                                                 save_freq=20)
 history=model.fit(
     train_generator,
-    batch_size=2,
-    epochs=50)
-
-  
-#history = model.fit(train, epochs=100,batch_size=4)
-
-#after data issue solved:
-# figure out how to get ROI's from new data
-# make new loss function of intersection of area
+    batch_size=4,
+    epochs=50,
+    callbacks=[cp_callback])
