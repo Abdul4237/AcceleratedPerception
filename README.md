@@ -1,4 +1,4 @@
- wil# AcceleratedPerception- Deep Learning model for Breast Cancer Diagnosis(BCD)
+ # AcceleratedPerception- Deep Learning model for Breast Cancer Diagnosis(BCD)
 Cancer Segmentation and Classification using Connected Seg-Net Architecture inspired by the following research paper:
 
 https://www.mdpi.com/2072-6694/14/16/4030?__cf_chl_tk=HDfgZg7b.79q4s6YG0yBCEfBoKd0VXUb4dLQiFrGnLU-1687956882-0-gaNycGzNDqU
