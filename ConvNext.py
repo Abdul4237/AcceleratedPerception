@@ -95,79 +95,83 @@ for i in range(0):
 
 
 train_ds = tf.keras.utils.image_dataset_from_directory(
-  r'd:\CMMd',
-  validation_split=0.2,
+  '/content/drive/MyDrive/Vinddrextractions',
+  validation_split=0.15,
+  label_mode='categorical',
   subset="training",
   color_mode='rgb',
   seed=120,
-  image_size=(1660, 700),
-  batch_size=1)     
+  image_size=(1711, 940),
+  batch_size=1)
 val_ds = tf.keras.utils.image_dataset_from_directory(
-  r'd:\CMMd',
-  validation_split=0.2,
-  subset="training",
+  '/content/drive/MyDrive/Vinddrextractions',
+  validation_split=0.15,
+  subset="validation",
+  label_mode='categorical',
   color_mode='rgb',
   seed=120,
-  image_size=(1660, 700),
-  batch_size=1) 
+  image_size=(1711, 940),
+  batch_size=1)
 
-#AUTOTUNE = tf.data.AUTOTUNE
-#train_ds = train_ds.cache().shuffle(1000).prefetch(buffer_size=AUTOTUNE)
-#val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
-
-
+data_augmentation = keras.Sequential(
+  [
+    layers.RandomFlip("horizontal",
+                      input_shape=(1571,
+                                  1052,
+                                  3)),
+    layers.RandomRotation(0.22),
+    layers.RandomZoom(0.1),
+  ]
+)
 class_names=train_ds.class_names
-#plt.figure(figsize=(10, 10))
-#for images, labels in train_ds.take(1):
-  #for i in range(4):
-    #ax = plt.subplot(2, 2, i + 1)
-    #plt.imshow(images[i].numpy().astype('uint8'))
-    #plt.title(class_names[labels[i]])
-    #plt.axis("off")
-#plt.show()
+#train_ds = train_ds.map(lambda x, y: (data_augmentation(x), y))
+#val_ds = val_ds.map(lambda x, y: (data_augmentation(x), y))
+
 
 model=tf.keras.applications.convnext.ConvNeXtSmall(
     model_name='convnext_small',
     include_top=False,
     weights='imagenet',
     #input_tensor=tf.keras.layers.Input(shape = (2294,1914,3)),
-    input_shape=(1660,700,3),
-    #consider tinkering with classes
-    classes=3,
-    classifier_activation='softmax'
+    input_shape=(1711,940,3)
 )
 output= tf.keras.layers.GlobalAveragePooling2D()(model.layers[-1].output)
 output=tf.keras.layers.LayerNormalization()(output)
-output=tf.keras.layers.Dense(1,kernel_initializer='random_uniform')(output)
-#output=tf.keras.layers.Flatten()(output)
+output=tf.keras.layers.Dense(3,kernel_initializer='random_uniform',activation='softmax')(output)
+
+initial_learning_rate = 0.0001
+final_learning_rate = 0.000005
+epochs=6
+learning_rate_decay_factor = (final_learning_rate / initial_learning_rate)**(1/epochs)
+lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+                initial_learning_rate=initial_learning_rate,
+                decay_steps=20771,
+                decay_rate=learning_rate_decay_factor,
+                staircase=True)
+
 
 newModel=keras.Model(inputs=model.inputs, outputs=output,name='BCDConvNext')
-
+newModel.load_weights('/content/drive/MyDrive/cp-0001.ckpt')
 newModel.compile(
-    loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
-    optimizer=keras.optimizers.Adam(learning_rate=0.0001),
+    loss=keras.losses.CategoricalCrossentropy(from_logits=False),
+    optimizer=keras.optimizers.Adam(learning_rate=0.00001),
     metrics=[
         metrics.AUC(),
-        metrics.Accuracy(),
+        metrics.CategoricalAccuracy(),
         metrics.Precision()
     ]
 )
-#newModel.summary()
-
-history=newModel.fit(
+checkpoint_path = "/content/drive/MyDrive/cp-{epoch:04d}.ckpt"
+checkpoint_dir = os.path.dirname(checkpoint_path)
+cp_callback = tf.keras.callbacks.ModelCheckpoint(
+    filepath=checkpoint_path,
+    verbose=1,
+    save_weights_only=True,
+    save_freq=20771)
+history2=newModel.fit(
     train_ds,
-    epochs=10,
-    validation_data=val_ds
+    epochs=15,
+    validation_data=val_ds,
+    callbacks=[cp_callback]
     )
-
-
-
-model2=tf.keras.applications.convnext.ConvNeXtBase(
-    model_name='convnext_base',
-    include_top=False,
-    weights='imagenet',
-    input_shape=(2294,1914,3),
-    pooling=None,
-    classes=3,
-    classifier_activation='softmax'
-)
+newModel.save_weights('/content/drive/MyDrive/finalweights3.ckpt')
